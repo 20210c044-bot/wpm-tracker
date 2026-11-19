@@ -388,6 +388,529 @@ row.innerHTML = `
 </td>
 `;
 tbody.appendChild(row);
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>読書スピード (WPM) 記録・グラフ化ツール</title>
+<!-- Tailwind CSS for styling -->
+<script src="https://cdn.tailwindcss.com"></script>
+<!-- Chart.js for graphs -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<!-- Firebase SDK (Cloud Firestore) -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAdNOyN6dCTSBP2kai9y-694wwzJrbGQUs",
+  authDomain: "wpm-app-eb8b9.firebaseapp.com",
+  projectId: "wpm-app-eb8b9",
+  storageBucket: "wpm-app-eb8b9.firebasestorage.app",
+  messagingSenderId: "714999744738",
+  appId: "1:714999744738:web:b8f57265039ed976a876bb",
+  measurementId: "G-YCES5K3YGT"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+window.firestoreDb = db;
+window.firestoreApi = { doc, getDoc, setDoc };
+window.dispatchEvent(new Event('firestore-ready'));
+</script>
+</head>
+<body class="bg-slate-50 min-h-screen text-slate-800 flex flex-col items-center p-4">
+
+<div class="w-full max-w-2xl bg-white shadow-md rounded-2xl p-6 my-6">
+<h1 class="text-2xl font-bold text-center text-blue-600 mb-2">読書スピード (WPM) 記録・グラフ化ツール</h1>
+
+<!-- ログイン / 生徒情報入力セクション -->
+<div id="auth-section" class="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6">
+<h2 class="text-md font-semibold text-blue-900 mb-2">あなたの情報を入力してください</h2>
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+<div>
+<label class="block text-xs font-medium text-slate-600 mb-1">出席番号</label>
+<input type="text" id="student-number" placeholder="例: 15" oninput="clearAuthError()" class="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+</div>
+<div>
+<label class="block text-xs font-medium text-slate-600 mb-1">名前（スペースなし）</label>
+<input type="text" id="student-name" placeholder="例: 山田太郎" oninput="clearAuthError()" class="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+</div>
+</div>
+<p id="auth-error-msg" class="hidden text-xs font-semibold text-rose-600 mb-3"></p>
+<button id="start-btn" onclick="startApp()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 rounded-lg transition">
+記録を始める・切り替える
+</button>
+</div>
+
+<!-- メインアプリセクション（初期状態は非表示） -->
+<div id="main-section" class="hidden">
+<div class="flex justify-between items-center bg-slate-100 px-4 py-2 rounded-lg mb-6">
+<div>
+<span id="current-user-display" class="font-bold text-slate-700"></span>
+<span id="sync-status" class="ml-2 text-xs text-emerald-600 font-medium"></span>
+</div>
+<button onclick="switchUser()" class="text-xs text-blue-600 hover:underline">ユーザーを切り替える</button>
+</div>
+
+<!-- タイマーセクション -->
+<div class="bg-indigo-50 border border-indigo-200 rounded-xl p-4 mb-6 text-center">
+<h3 class="text-xs font-bold text-indigo-900 mb-2 uppercase tracking-wider">計測用タイマー</h3>
+<div id="timer-display" class="text-4xl font-mono font-bold text-indigo-600 mb-3">00:00</div>
+
+<div class="flex justify-center gap-2 mb-3">
+<button id="timer-start-btn" onclick="startTimer()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm px-4 py-1.5 rounded-lg font-medium transition">スタート</button>
+<button id="timer-stop-btn" onclick="stopTimer()" disabled class="bg-slate-300 text-white text-sm px-4 py-1.5 rounded-lg font-medium transition cursor-not-allowed">ストップ</button>
+<button onclick="resetTimer()" class="bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm px-3 py-1.5 rounded-lg font-medium transition">リセット</button>
+</div>
+
+<div class="flex justify-center items-center gap-3 text-xs text-slate-600">
+<label class="flex items-center gap-1 cursor-pointer">
+<input type="radio" name="timer-mode" value="stopwatch" checked onchange="toggleTimerMode()" class="text-indigo-600"> ストップウォッチ (加算)
+</label>
+<label class="flex items-center gap-1 cursor-pointer">
+<input type="radio" name="timer-mode" value="countdown" onchange="toggleTimerMode()" class="text-indigo-600"> カウントダウン
+</label>
+<span id="countdown-set-wrap" class="hidden">
+<input type="number" id="countdown-minutes" value="1" min="1" max="60" class="w-12 px-1 py-0.5 border rounded text-center"> 分
+</span>
+</div>
+</div>
+
+<!-- 入力フォーム -->
+<form id="wps-form" onsubmit="addRecord(event)" class="space-y-4 mb-6">
+<div>
+<label class="block text-sm font-medium text-slate-700 mb-1">教材名（テキスト名など）</label>
+<input type="text" id="material-input" required placeholder="例: Lesson 1 読み物" class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+</div>
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+<div>
+<label class="block text-sm font-medium text-slate-700 mb-1">Word数（語数）</label>
+<input type="number" id="words-input" min="1" required placeholder="例: 150" class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+</div>
+<div>
+<label class="block text-sm font-medium text-slate-700 mb-1">かかった時間</label>
+<div class="flex gap-2">
+<input type="number" id="time-input" min="0.1" step="any" required placeholder="タイマー停止で自動連携" class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+<select id="time-unit" class="border rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+<option value="seconds" selected>秒 (s)</option>
+<option value="minutes">分 (min)</option>
+</select>
+</div>
+</div>
+</div>
+<button type="submit" id="submit-btn" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-2.5 rounded-lg transition shadow-sm">
+記録を追加する
+</button>
+</form>
+
+<!-- 結果表示エリア -->
+<div class="bg-blue-50 border border-blue-100 rounded-xl p-4 text-center mb-6">
+<p class="text-xs text-blue-600 font-medium mb-1">今回の読書スピード (WPM)</p>
+<p id="latest-wpm" class="text-3xl font-bold text-blue-900">-</p>
+</div>
+
+<!-- グラフエリア -->
+<div class="bg-white border rounded-xl p-4 mb-6">
+<h3 class="text-sm font-semibold text-slate-700 mb-3">WPMの推移グラフ</h3>
+<div class="relative h-64 w-full">
+<canvas id="wpmChart"></canvas>
+</div>
+</div>
+
+<!-- 履歴リスト -->
+<div class="border rounded-xl overflow-hidden">
+<div class="bg-slate-100 px-4 py-2.5 flex justify-between items-center">
+<h3 class="text-sm font-semibold text-slate-700">これまでの記録</h3>
+<button onclick="clearRecords()" class="text-xs text-rose-600 hover:underline">全データをリセット</button>
+</div>
+<div class="max-h-56 overflow-y-auto">
+<table class="w-full text-left border-collapse text-sm">
+<thead class="bg-slate-50 text-slate-500 sticky top-0 border-b">
+<tr>
+<th class="p-3">日時</th>
+<th class="p-3">教材名</th>
+<th class="p-3">Word / 時間</th>
+<th class="p-3">WPM</th>
+<th class="p-3 text-center">操作</th>
+</tr>
+</thead>
+<tbody id="records-table-body" class="divide-y divide-slate-100">
+<!-- 動的に挿入 -->
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</div>
+
+<!-- スクリプトの処理 -->
+<script>
+let chart = null;
+let currentUserKey = "";
+let records = [];
+let isFirestoreReady = false;
+
+window.addEventListener('firestore-ready', () => {
+isFirestoreReady = true;
+});
+
+function setSyncStatus(text, isError = false) {
+const el = document.getElementById('sync-status');
+if (!el) return;
+el.textContent = text;
+el.className = isError
+? "ml-2 text-xs text-rose-600 font-medium"
+: "ml-2 text-xs text-emerald-600 font-medium";
+}
+
+function showAuthError(message) {
+const errEl = document.getElementById('auth-error-msg');
+if (errEl) {
+errEl.textContent = message;
+errEl.classList.remove('hidden');
+}
+alert(message);
+}
+
+function clearAuthError() {
+const errEl = document.getElementById('auth-error-msg');
+if (errEl) {
+errEl.textContent = '';
+errEl.classList.add('hidden');
+}
+}
+
+// タイマー用変数
+let timerInterval = null;
+let timerSeconds = 0;
+let isTimerRunning = false;
+let countdownInitialSeconds = 0;
+
+async function startApp() {
+const numInput = document.getElementById('student-number');
+const nameInput = document.getElementById('student-name');
+const num = numInput.value;
+const name = nameInput.value;
+
+clearAuthError();
+
+if (!num.trim() || !name.trim()) {
+showAuthError('出席番号と名前を入力してください。');
+return;
+}
+
+// 半角スペースまたは全角スペースが含まれているかチェック
+const hasSpaceInNum = /[\s\u3000]/.test(num);
+const hasSpaceInName = /[\s\u3000]/.test(name);
+
+if (hasSpaceInNum && hasSpaceInName) {
+showAuthError('エラー: 出席番号と名前の両方にスペースが含まれています。スペースを入れずに入力してください。');
+return;
+}
+if (hasSpaceInNum) {
+showAuthError('エラー: 出席番号にスペースが含まれています。スペースを入れずに入力してください。');
+return;
+}
+if (hasSpaceInName) {
+showAuthError('エラー: 名前にスペースが含まれています。スペースを入れずに入力してください（例: 山田太郎）。');
+return;
+}
+
+if (!isFirestoreReady) {
+showAuthError('データベースに接続中です。数秒待ってからもう一度お試しください。');
+return;
+}
+
+currentUserKey = `wpm_data_${num}_${name}`;
+document.getElementById('current-user-display').textContent = `ログイン中: ${num}番 ${name}`;
+
+const startBtn = document.getElementById('start-btn');
+startBtn.disabled = true;
+startBtn.textContent = '読み込み中...';
+
+try {
+await loadRecords();
+document.getElementById('auth-section').classList.add('hidden');
+document.getElementById('main-section').classList.remove('hidden');
+initChart();
+updateUI();
+setSyncStatus('クラウド同期済み');
+} finally {
+startBtn.disabled = false;
+startBtn.textContent = '記録を始める・切り替える';
+}
+}
+
+function switchUser() {
+stopTimer();
+resetTimer();
+clearAuthError();
+document.getElementById('main-section').classList.add('hidden');
+document.getElementById('auth-section').classList.remove('hidden');
+if (chart) {
+chart.destroy();
+chart = null;
+}
+}
+
+// --- タイマー機能 ---
+function getTimerMode() {
+const radios = document.getElementsByName('timer-mode');
+for (let r of radios) {
+if (r.checked) return r.value;
+}
+return 'stopwatch';
+}
+
+function toggleTimerMode() {
+stopTimer();
+resetTimer();
+const mode = getTimerMode();
+const wrap = document.getElementById('countdown-set-wrap');
+if (mode === 'countdown') {
+wrap.classList.remove('hidden');
+} else {
+wrap.classList.add('hidden');
+}
+}
+
+function formatTime(sec) {
+const m = Math.floor(sec / 60);
+const s = Math.floor(sec % 60);
+return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function startTimer() {
+if (isTimerRunning) return;
+
+const mode = getTimerMode();
+if (mode === 'countdown' && timerSeconds === 0) {
+const mins = parseFloat(document.getElementById('countdown-minutes').value) || 1;
+timerSeconds = mins * 60;
+countdownInitialSeconds = timerSeconds;
+}
+
+isTimerRunning = true;
+document.getElementById('timer-start-btn').disabled = true;
+document.getElementById('timer-start-btn').classList.add('bg-slate-300', 'cursor-not-allowed');
+document.getElementById('timer-start-btn').classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
+
+document.getElementById('timer-stop-btn').disabled = false;
+document.getElementById('timer-stop-btn').classList.remove('bg-slate-300', 'cursor-not-allowed');
+document.getElementById('timer-stop-btn').classList.add('bg-rose-600', 'hover:bg-rose-700');
+
+const startTime = Date.now() - (mode === 'stopwatch' ? timerSeconds * 1000 : (countdownInitialSeconds - timerSeconds) * 1000);
+
+timerInterval = setInterval(() => {
+const elapsedSec = (Date.now() - startTime) / 1000;
+if (mode === 'stopwatch') {
+timerSeconds = elapsedSec;
+} else {
+timerSeconds = countdownInitialSeconds - elapsedSec;
+if (timerSeconds <= 0) {
+timerSeconds = 0;
+stopTimer();
+alert('タイマーが終了しました！');
+}
+}
+document.getElementById('timer-display').textContent = formatTime(Math.max(0, timerSeconds));
+}, 100);
+}
+
+function stopTimer() {
+if (!isTimerRunning && !timerInterval) return;
+
+clearInterval(timerInterval);
+timerInterval = null;
+isTimerRunning = false;
+
+document.getElementById('timer-start-btn').disabled = false;
+document.getElementById('timer-start-btn').classList.remove('bg-slate-300', 'cursor-not-allowed');
+document.getElementById('timer-start-btn').classList.add('bg-indigo-600', 'hover:bg-indigo-700');
+
+document.getElementById('timer-stop-btn').disabled = true;
+document.getElementById('timer-stop-btn').classList.add('bg-slate-300', 'cursor-not-allowed');
+document.getElementById('timer-stop-btn').classList.remove('bg-rose-600', 'hover:bg-rose-700');
+
+// 経過時間をフォームに自動転送
+const mode = getTimerMode();
+let elapsedSec = 0;
+if (mode === 'stopwatch') {
+elapsedSec = timerSeconds;
+} else {
+elapsedSec = countdownInitialSeconds - timerSeconds;
+}
+
+if (elapsedSec > 0) {
+document.getElementById('time-input').value = Math.round(elapsedSec);
+document.getElementById('time-unit').value = 'seconds';
+}
+}
+
+function resetTimer() {
+stopTimer();
+timerSeconds = 0;
+countdownInitialSeconds = 0;
+document.getElementById('timer-display').textContent = "00:00";
+}
+
+// --- Firestore データ処理 ---
+async function loadRecords() {
+const { doc, getDoc } = window.firestoreApi;
+const db = window.firestoreDb;
+
+try {
+setSyncStatus('読み込み中...');
+const docRef = doc(db, "wpm_users", currentUserKey);
+const docSnap = await getDoc(docRef);
+
+if (docSnap.exists()) {
+const data = docSnap.data();
+records = Array.isArray(data.records) ? data.records : [];
+} else {
+records = [];
+}
+setSyncStatus('クラウド同期済み');
+} catch (error) {
+console.error("Firestore読み込みエラー:", error);
+records = [];
+setSyncStatus('読み込みエラー', true);
+alert('クラウドからのデータ読み込みに失敗しました。Firestoreの設定やルールをご確認ください。');
+}
+}
+
+async function saveRecords() {
+const { doc, setDoc } = window.firestoreApi;
+const db = window.firestoreDb;
+
+try {
+setSyncStatus('保存中...');
+const docRef = doc(db, "wpm_users", currentUserKey);
+await setDoc(docRef, {
+records: records,
+updatedAt: new Date().toISOString()
+});
+setSyncStatus('クラウド保存完了');
+} catch (error) {
+console.error("Firestore保存エラー:", error);
+setSyncStatus('保存エラー', true);
+alert('クラウドへの保存に失敗しました。通信環境やFirestoreのルールをご確認ください。');
+}
+}
+
+function initChart() {
+const ctx = document.getElementById('wpmChart').getContext('2d');
+if (chart) chart.destroy();
+
+chart = new Chart(ctx, {
+type: 'line',
+data: {
+labels: [],
+datasets: [{
+label: 'WPM',
+data: [],
+borderColor: '#2563eb',
+backgroundColor: 'rgba(37, 99, 235, 0.1)',
+borderWidth: 2,
+tension: 0.2,
+fill: true,
+pointRadius: 4
+}]
+},
+options: {
+responsive: true,
+maintainAspectRatio: false,
+scales: {
+y: { beginAtZero: true, title: { display: true, text: 'WPM (words/min)' } }
+},
+plugins: {
+tooltip: {
+callbacks: {
+title: function(context) {
+const index = context[0].dataIndex;
+return `${records[index].date} - ${records[index].material}`;
+}
+}
+}
+}
+}
+});
+}
+
+async function addRecord(event) {
+event.preventDefault();
+const material = document.getElementById('material-input').value.trim();
+const words = parseFloat(document.getElementById('words-input').value);
+const timeVal = parseFloat(document.getElementById('time-input').value);
+const timeUnit = document.getElementById('time-unit').value;
+
+const seconds = timeUnit === 'minutes' ? timeVal * 60 : timeVal;
+if (seconds <= 0) return;
+
+const wpm = (words / seconds) * 60;
+
+const now = new Date();
+const timeString = `${now.getMonth() + 1}/${now.getDate()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+const newEntry = {
+date: timeString,
+material: material,
+words: words,
+timeDisplay: `${timeVal}${timeUnit === 'minutes' ? '分' : '秒'}`,
+wpm: Math.round(wpm)
+};
+
+const submitBtn = document.getElementById('submit-btn');
+submitBtn.disabled = true;
+submitBtn.textContent = '保存中...';
+
+records.push(newEntry);
+await saveRecords();
+updateUI();
+
+document.getElementById('words-input').value = '';
+document.getElementById('time-input').value = '';
+resetTimer();
+
+submitBtn.disabled = false;
+submitBtn.textContent = '記録を追加する';
+}
+
+async function deleteRecord(index) {
+if (confirm(`「${records[index].material}」の記録を削除しますか？`)) {
+records.splice(index, 1);
+await saveRecords();
+updateUI();
+}
+}
+
+function updateUI() {
+const tbody = document.getElementById('records-table-body');
+tbody.innerHTML = '';
+
+const labels = [];
+const dataWpm = [];
+
+records.forEach((rec, index) => {
+labels.push(`${index + 1}. ${rec.material}`);
+dataWpm.push(rec.wpm);
+
+const row = document.createElement('tr');
+row.className = "hover:bg-slate-50";
+row.innerHTML = `
+<td class="p-3 text-slate-600 text-xs">${rec.date}</td>
+<td class="p-3 font-medium">${rec.material}</td>
+<td class="p-3 text-xs text-slate-500">${rec.words}語 / ${rec.timeDisplay}</td>
+<td class="p-3 font-semibold text-blue-600">${rec.wpm}</td>
+<td class="p-3 text-center">
+<button onclick="deleteRecord(${index})" class="text-xs text-rose-500 hover:text-rose-700 hover:underline">削除</button>
+</td>
+`;
+tbody.appendChild(row);
 });
 
 if (records.length > 0) {
@@ -404,14 +927,13 @@ chart.update();
 }
 }
 
-function clearRecords() {
+async function clearRecords() {
 if (confirm('このユーザーのすべての記録を削除しますか？')) {
 records = [];
-saveRecords();
+await saveRecords();
 updateUI();
 }
 }
 </script>
 </body>
 </html>
-
